@@ -13,7 +13,8 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs", "process", "net", "signal", "io-std", "io-util"] }
+# the loop needs only these; process, net, fs and signal do not build for wasm32
+tokio = { workspace = true, features = ["macros", "sync", "rt", "time"] }
 tokio-util = { workspace = true, features = ["compat"] }
 async-trait = { workspace = true }
 goose-provider-types = { version = "0.1.0-alpha.9", path = "../goose-provider-types", default-features = false }

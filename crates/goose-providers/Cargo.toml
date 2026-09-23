@@ -37,7 +37,8 @@ chrono = { workspace = true }
 futures = { workspace = true }
 goose-provider-types = { version = "0.1.0-alpha.9", path = "../goose-provider-types", default-features = false }
 goose-local-inference = { version = "0.1.0-alpha.9", path = "../goose-local-inference", default-features = false, optional = true }
-reqwest = { workspace = true }
+# json and stream were only on through rmcp's auth feature (as in aaif-goose/goose#10350)
+reqwest = { workspace = true, features = ["json", "stream"] }
 rmcp = { workspace = true, features = ["server", "macros"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -45,7 +46,8 @@ tracing = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["io-util"] }
-tokio-util = { workspace = true, features = ["compat"] }
+# io and codec were only on through rmcp's auth feature (as in aaif-goose/goose#10350)
+tokio-util = { workspace = true, features = ["compat", "io", "codec"] }
 url = { workspace = true }
 urlencoding = { workspace = true }
 pem = { version = "4.0.0", default-features = false, features = ["std"], optional = true }
