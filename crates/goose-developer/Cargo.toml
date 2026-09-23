@@ -1,0 +1,36 @@
+[package]
+name = "goose-developer"
+version = "0.1.0-alpha.9"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "goose's developer tools (shell, write, edit, tree) for GDK embedders"
+
+[lints]
+workspace = true
+
+[dependencies]
+goose-agent = { version = "0.1.0-alpha.9", path = "../goose-agent" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+ignore = { workspace = true }
+rmcp = { workspace = true, features = ["server"] }
+schemars = { workspace = true, features = ["derive"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["process", "io-util", "time", "rt", "macros", "sync"] }
+tokio-stream = { workspace = true, features = ["io-util"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+which = { workspace = true }
+
+[target."cfg(not(windows))".dependencies]
+# shell.rs uses ProcessSession; in `goose` that feature only arrives via goose-mcp
+process-wrap = { version = "9", default-features = false, features = ["std", "process-session"] }
+
+[dev-dependencies]
+test-case = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
