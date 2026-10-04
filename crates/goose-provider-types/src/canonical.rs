@@ -9,7 +9,8 @@ pub use name_builder::{
     canonical_name, map_provider_name, map_to_canonical_model, strip_version_suffix,
 };
 pub use registry::{
-    activate, fetch_remote_catalog, load_cached_catalog, CanonicalModelRegistry, RemoteCatalog,
+    activate_catalog, fetch_remote_catalog, load_cached_catalog, CanonicalModelRegistry,
+    RemoteCatalog,
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
