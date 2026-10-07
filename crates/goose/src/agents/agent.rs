@@ -1688,7 +1688,9 @@ impl Agent {
             Arc::new(MaxTurnsOperation::new(max_turns)),
             Arc::new(BangShellOperation::new()),
         ];
-        if !manages_own_context {
+        // fragment/optmem: GOOSE_NO_COMPACTION drops the compaction operation
+        // (threshold and overflow recovery) from the state machine too.
+        if !manages_own_context && !crate::context_mgmt::compaction_disabled() {
             operations.push(Arc::new(CompactionOperation::new(
                 provider.clone(),
                 model_config.clone(),
@@ -3159,11 +3161,24 @@ impl Agent {
                                 no_tools_called = false;
                             }
                         }
-                        #[allow(unused_variables)]
                         Err(ref provider_err @ ProviderError::ContextLengthExceeded(_)) => {
                             provider_errored = true;
                             #[cfg(feature = "telemetry")]
                             crate::posthog::emit_error(provider_err.telemetry_type(), &provider_err.to_string());
+
+                            // fragment/optmem: the host owns the context
+                            // (GOOSE_NO_COMPACTION), so end the turn and say
+                            // why instead of summarizing what it sent.
+                            if crate::context_mgmt::compaction_disabled() {
+                                error!("Context limit exceeded and compaction is disabled");
+                                yield AgentEvent::Message(
+                                    Message::assistant().with_text(format!(
+                                        "Context limit reached, and compaction is disabled (GOOSE_NO_COMPACTION): {provider_err}"
+                                    ))
+                                );
+                                break;
+                            }
+
                             compaction_attempts += 1;
 
                             if compaction_attempts >= 2 {

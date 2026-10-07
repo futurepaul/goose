@@ -24,10 +24,24 @@ pub use goose_context_management::DEFAULT_COMPACTION_THRESHOLD;
 
 pub(crate) const TOOLCALL_SUMMARIZATION_BATCH_SIZE: usize = 10;
 
-pub(crate) fn tool_pair_summarization_enabled() -> bool {
-    Config::global()
-        .get_param::<bool>("GOOSE_TOOL_PAIR_SUMMARIZATION")
+/// fragment/optmem: `GOOSE_NO_COMPACTION=1` (or `true`) means a session never
+/// compacts or summarizes its own context. No auto-compaction before a turn
+/// (whatever `GOOSE_AUTO_COMPACT_THRESHOLD` says), no recovery compaction when
+/// the provider reports a context overflow (the turn ends with a message
+/// saying so instead), and no tool-pair summarization. It is for hosts that
+/// start a fresh session per turn and own the context themselves, so goose
+/// must never rewrite what they sent. An explicit `/compact` still runs.
+pub fn compaction_disabled() -> bool {
+    std::env::var("GOOSE_NO_COMPACTION")
+        .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes"))
         .unwrap_or(false)
+}
+
+pub(crate) fn tool_pair_summarization_enabled() -> bool {
+    !compaction_disabled()
+        && Config::global()
+            .get_param::<bool>("GOOSE_TOOL_PAIR_SUMMARIZATION")
+            .unwrap_or(false)
 }
 
 const CONVERSATION_CONTINUATION_TEXT: &str =
@@ -227,7 +241,7 @@ pub async fn check_if_compaction_needed(
     threshold_override: Option<f64>,
     session: &crate::session::Session,
 ) -> Result<bool> {
-    if provider.manages_own_context() {
+    if provider.manages_own_context() || compaction_disabled() {
         return Ok(false);
     }
 
