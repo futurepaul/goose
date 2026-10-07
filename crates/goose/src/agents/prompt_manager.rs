@@ -14,11 +14,30 @@ use crate::{
 };
 use std::path::Path;
 
+/// fragment/optmem: `GOOSE_STABLE_SYSTEM_PROMPT=1` (or `true`) keeps the system
+/// prompt byte-identical for a given configuration, across sessions and for the
+/// whole of each one, so it stays the head of every cached prefix. goose's own
+/// template has no clock in it (the time rides in the `<turn-context>` block,
+/// after the user's message), so this changes two things:
+/// - `{{current_date_time}}` renders empty, for override templates that use it;
+/// - hint files (.goosehints, AGENTS.md) in subdirectories that tool calls
+///   touch are not added mid-session. The working directory's own hints, read
+///   when the prompt is built, still are.
+///
+/// Each `PromptManager` (one per agent, so per session) reads it once.
+fn stable_system_prompt() -> bool {
+    std::env::var("GOOSE_STABLE_SYSTEM_PROMPT")
+        .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes"))
+        .unwrap_or(false)
+}
+
 pub struct PromptManager {
     system_prompt_override: Option<String>,
     system_prompt_extras: IndexMap<String, String>,
     current_date_timestamp: String,
     subdirectory_hint_tracker: SubdirectoryHintTracker,
+    /// fragment/optmem: `GOOSE_STABLE_SYSTEM_PROMPT`, see `stable_system_prompt`.
+    stable: bool,
 }
 
 impl Default for PromptManager {
@@ -125,7 +144,11 @@ impl<'a> SystemPromptBuilder<'a, PromptManager> {
 
         let context = SystemPromptContext {
             extensions: sanitized_extensions_info,
-            current_date_time: self.manager.current_date_timestamp.clone(),
+            current_date_time: if self.manager.stable {
+                String::new()
+            } else {
+                self.manager.current_date_timestamp.clone()
+            },
             goose_mode,
             is_autonomous: goose_mode == GooseMode::Auto,
             enable_subagents: self.subagents_enabled,
@@ -186,6 +209,7 @@ impl PromptManager {
             // Filtering to an hour to balance user time accuracy and multi session prompt cache hits.
             current_date_timestamp: Utc::now().format("%Y-%m-%d %H:00 %:z").to_string(),
             subdirectory_hint_tracker: SubdirectoryHintTracker::new(),
+            stable: stable_system_prompt(),
         }
     }
 
@@ -196,6 +220,7 @@ impl PromptManager {
             system_prompt_extras: IndexMap::new(),
             current_date_timestamp: dt.format("%Y-%m-%d %H:%M:%S %:z").to_string(),
             subdirectory_hint_tracker: SubdirectoryHintTracker::new(),
+            stable: false,
         }
     }
 
@@ -214,11 +239,18 @@ impl PromptManager {
         arguments: &Option<serde_json::Map<String, serde_json::Value>>,
         working_dir: &Path,
     ) {
+        if self.stable {
+            return;
+        }
         self.subdirectory_hint_tracker
             .record_tool_arguments(arguments, working_dir);
     }
 
     pub fn load_subdirectory_hints(&mut self, working_dir: &Path) -> bool {
+        // fragment/optmem: a new hint mid-session would change the prompt.
+        if self.stable {
+            return false;
+        }
         let new_hints = self.subdirectory_hint_tracker.load_new_hints(working_dir);
         let has_new = !new_hints.is_empty();
         for (key, content) in new_hints {
@@ -296,6 +328,39 @@ mod tests {
         let result = manager.builder().build();
 
         assert_eq!(result, "It is currently 1970-01-01 00:00:00 +00:00");
+    }
+
+    #[test]
+    fn stable_prompt_ignores_the_clock_and_subdirectory_hints() {
+        let working_dir = tempfile::tempdir().unwrap();
+        let repo = working_dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        std::fs::write(repo.join(crate::hints::AGENTS_MD_FILENAME), "SUBDIR HINT").unwrap();
+        let arguments = serde_json::json!({ "path": repo.join("main.rs") })
+            .as_object()
+            .cloned();
+
+        // A session that starts at `seconds` and then touches `repo/`.
+        let session_prompt = |stable: bool, seconds: i64| {
+            let mut manager =
+                PromptManager::with_timestamp(DateTime::<Utc>::from_timestamp(seconds, 0).unwrap());
+            manager.stable = stable;
+            manager.set_system_prompt_override("It is {{current_date_time}}.".to_string());
+            manager.record_tool_arguments(&arguments, working_dir.path());
+            let loaded = manager.load_subdirectory_hints(working_dir.path());
+            (loaded, manager.builder().build())
+        };
+
+        let (loaded, prompt) = session_prompt(false, 0);
+        assert!(loaded);
+        assert!(prompt.contains("SUBDIR HINT"));
+        assert!(prompt.contains("1970-01-01"));
+
+        let (loaded, first) = session_prompt(true, 0);
+        let (_, a_year_later) = session_prompt(true, 365 * 24 * 60 * 60);
+        assert!(!loaded);
+        assert_eq!(first, "It is .");
+        assert_eq!(first, a_year_later);
     }
 
     #[test]
