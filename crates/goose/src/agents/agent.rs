@@ -605,14 +605,17 @@ impl Agent {
                 crate::context_mgmt::compute_tool_call_cutoff(context_limit, compaction_threshold)
             });
         let manages_own_context = provider.manages_own_context();
+        // GOOSE_NO_COMPACTION: the host owns the context, as a provider that
+        // manages its own does, so no compaction operation runs at all.
+        let compacts = !manages_own_context && !crate::context_mgmt::compaction_disabled();
         let tool_pair_compaction_enabled =
-            crate::context_mgmt::tool_pair_summarization_enabled() && !manages_own_context;
+            crate::context_mgmt::tool_pair_summarization_enabled() && compacts;
 
         let mut operations: Vec<Arc<dyn Operation<Session, GooseEffect> + '_>> = vec![
             Arc::new(SteerOperation::new(steer_queue, self.hook_manager.clone())),
             Arc::new(BangShellOperation::new()),
         ];
-        if !manages_own_context {
+        if compacts {
             operations.push(Arc::new(CompactionOperation::new(
                 provider.clone(),
                 model_config.clone(),

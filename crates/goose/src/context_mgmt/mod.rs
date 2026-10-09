@@ -43,10 +43,23 @@ pub fn auto_compact_threshold(context_limit: usize) -> f64 {
     threshold.min(token_limit as f64 / context_limit as f64)
 }
 
+/// `GOOSE_NO_COMPACTION=1` (or `true`): a session never compacts or
+/// summarizes its own context. No auto-compaction ahead of an inference
+/// (whatever `GOOSE_AUTO_COMPACT_THRESHOLD` says), no recovery compaction when
+/// the provider reports a context overflow (the turn ends with the provider's
+/// error instead), no `/compact`, and no tool-pair summarization. For hosts
+/// that start a fresh session per turn and own the context themselves, so
+/// goose must never rewrite what they sent.
+pub fn compaction_disabled() -> bool {
+    std::env::var("GOOSE_NO_COMPACTION")
+        .is_ok_and(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes"))
+}
+
 pub(crate) fn tool_pair_summarization_enabled() -> bool {
-    Config::global()
-        .get_param::<bool>("GOOSE_TOOL_PAIR_SUMMARIZATION")
-        .unwrap_or(false)
+    !compaction_disabled()
+        && Config::global()
+            .get_param::<bool>("GOOSE_TOOL_PAIR_SUMMARIZATION")
+            .unwrap_or(false)
 }
 
 const CONVERSATION_CONTINUATION_TEXT: &str =
@@ -246,7 +259,7 @@ pub async fn check_if_compaction_needed(
     threshold_override: Option<f64>,
     session: &crate::session::Session,
 ) -> Result<bool> {
-    if provider.manages_own_context() {
+    if provider.manages_own_context() || compaction_disabled() {
         return Ok(false);
     }
 
