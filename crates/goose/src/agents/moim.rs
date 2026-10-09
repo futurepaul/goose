@@ -26,8 +26,20 @@ thread_local! {
     pub static SKIP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// `GOOSE_NO_TURN_CONTEXT=1` (or `true`): goose adds no turn context, neither
+/// the `<turn-context>` message before each inference nor the system prompt's
+/// section about it. For hosts that send their own per-turn context (the
+/// time, where the agent works) and want what reaches the model after goose's
+/// own prompt to be theirs alone. Its parts (the time, the working directory,
+/// compaction status, the turn budget, extensions' context) go with it.
+pub fn turn_context_disabled() -> bool {
+    SKIP.with(|f| f.get())
+        || std::env::var("GOOSE_NO_TURN_CONTEXT")
+            .is_ok_and(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes"))
+}
+
 pub fn system_prompt_block() -> Option<String> {
-    if SKIP.with(|f| f.get()) {
+    if turn_context_disabled() {
         None
     } else {
         Some(SYSTEM_PROMPT_BLOCK_TEMPLATE.replace("{turn_context_tag}", TURN_CONTEXT_TAG))
@@ -43,7 +55,7 @@ pub async fn turn_context_message(
     turn_start: chrono::DateTime<chrono::Local>,
     compaction_info: Option<String>,
 ) -> Option<Message> {
-    if SKIP.with(|f| f.get()) {
+    if turn_context_disabled() {
         return None;
     }
 
@@ -98,7 +110,7 @@ pub(crate) fn turn_context_event(
     parts: Vec<String>,
     turn_start: chrono::DateTime<chrono::Local>,
 ) -> Option<Message> {
-    if SKIP.with(|f| f.get()) || should_skip_moim(context_limit) {
+    if turn_context_disabled() || should_skip_moim(context_limit) {
         return None;
     }
 
