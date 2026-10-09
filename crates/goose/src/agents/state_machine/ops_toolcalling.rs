@@ -780,6 +780,35 @@ fn request_has_approval_history(messages: &[Message], request: &ToolRequest) -> 
     })
 }
 
+/// The hints (.goosehints, AGENTS.md) of the subdirectories the conversation's
+/// tool calls touched, as prompt parts. None when the system prompt is kept
+/// stable (`GOOSE_STABLE_SYSTEM_PROMPT`): a hint found mid-session would
+/// change it, and the system prompt heads every cached prefix.
+fn subdirectory_hints(
+    conversation: &Conversation,
+    working_dir: &std::path::Path,
+    stable: bool,
+) -> Vec<(String, String)> {
+    if stable {
+        return Vec::new();
+    }
+    let mut hints = SubdirectoryHintTracker::new();
+    for message in conversation
+        .messages()
+        .iter()
+        .filter(|message| message.is_agent_visible())
+    {
+        for content in &message.content {
+            if let MessageContent::ToolRequest(request) = content {
+                if let Ok(tool_call) = &request.tool_call {
+                    hints.record_tool_arguments(&tool_call.arguments, working_dir);
+                }
+            }
+        }
+    }
+    hints.load_new_hints(working_dir)
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub(super) enum ToolDisposition {
     Execute,
@@ -859,21 +888,11 @@ impl Operation<Session, GooseEffect> for ToolExecutionOperation {
         session: &Session,
         conversation: &Conversation,
     ) -> Result<Vec<(String, String)>> {
-        let mut hints = SubdirectoryHintTracker::new();
-        for message in conversation
-            .messages()
-            .iter()
-            .filter(|message| message.is_agent_visible())
-        {
-            for content in &message.content {
-                if let MessageContent::ToolRequest(request) = content {
-                    if let Ok(tool_call) = &request.tool_call {
-                        hints.record_tool_arguments(&tool_call.arguments, &session.working_dir);
-                    }
-                }
-            }
-        }
-        let mut prompt_parts = hints.load_new_hints(&session.working_dir);
+        let mut prompt_parts = subdirectory_hints(
+            conversation,
+            &session.working_dir,
+            crate::agents::prompt_manager::stable_system_prompt(),
+        );
 
         let lease = self.lease(session).await?;
         #[cfg(feature = "code-mode")]
@@ -1135,6 +1154,32 @@ mod tests {
 
         assert_eq!(pending.len(), 1);
         assert!(matches!(pending[0].1, ToolDisposition::Execute));
+    }
+
+    /// A tool call that touches a subdirectory with an AGENTS.md adds its
+    /// hints to the next request's system prompt, unless it is kept stable.
+    #[test]
+    fn a_stable_system_prompt_takes_no_subdirectory_hints() {
+        let working_dir = tempfile::tempdir().unwrap();
+        let repo = working_dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        std::fs::write(repo.join(crate::hints::AGENTS_MD_FILENAME), "SUBDIR HINT").unwrap();
+        let arguments = serde_json::json!({ "path": repo.join("main.rs") });
+        let conversation = Conversation::new_unvalidated(vec![
+            Message::user().with_text("look at repo"),
+            Message::assistant().with_tool_request(
+                "read",
+                Ok(CallToolRequestParams::new("developer__read")
+                    .with_arguments(arguments.as_object().unwrap().clone())),
+            ),
+        ]);
+
+        let hints = subdirectory_hints(&conversation, working_dir.path(), false);
+        assert!(
+            hints.iter().any(|(_, hint)| hint.contains("SUBDIR HINT")),
+            "{hints:?}"
+        );
+        assert!(subdirectory_hints(&conversation, working_dir.path(), true).is_empty());
     }
 
     #[test]

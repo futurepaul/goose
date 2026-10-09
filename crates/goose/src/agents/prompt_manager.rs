@@ -15,8 +15,25 @@ use crate::{
 };
 use std::path::Path;
 
+/// `GOOSE_STABLE_SYSTEM_PROMPT=1` (or `true`) keeps the system prompt
+/// byte-identical for a given configuration, across sessions and through each
+/// one, so it stays the head of every cached prefix. goose's own template has
+/// no clock in it (the time rides in the turn context, after the user's
+/// message), so this changes two things:
+/// - `{{current_date_time}}` renders empty, for override templates that use it;
+/// - hint files (.goosehints, AGENTS.md) in subdirectories that tool calls
+///   touch are not added mid-session. The working directory's own hints, read
+///   with the rest of the prompt, still are.
+pub(crate) fn stable_system_prompt() -> bool {
+    std::env::var("GOOSE_STABLE_SYSTEM_PROMPT")
+        .is_ok_and(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes"))
+}
+
 pub struct PromptManager {
     current_date_timestamp: String,
+    /// `GOOSE_STABLE_SYSTEM_PROMPT`, read when it is made: see
+    /// `stable_system_prompt`.
+    stable: bool,
 }
 
 impl Default for PromptManager {
@@ -131,7 +148,11 @@ impl<'a> SystemPromptBuilder<'a, PromptManager> {
 
         let context = SystemPromptContext {
             extensions: sanitized_extensions_info,
-            current_date_time: self.manager.current_date_timestamp.clone(),
+            current_date_time: if self.manager.stable {
+                String::new()
+            } else {
+                self.manager.current_date_timestamp.clone()
+            },
             goose_mode,
             is_autonomous: goose_mode == GooseMode::Auto,
             enable_subagents: self.subagents_enabled,
@@ -188,6 +209,7 @@ impl PromptManager {
             // Use the fixed current date time so that prompt cache can be used.
             // Filtering to an hour to balance user time accuracy and multi session prompt cache hits.
             current_date_timestamp: Utc::now().format("%Y-%m-%d %H:00 %:z").to_string(),
+            stable: stable_system_prompt(),
         }
     }
 
@@ -195,6 +217,7 @@ impl PromptManager {
     pub fn with_timestamp(dt: DateTime<Utc>) -> Self {
         PromptManager {
             current_date_timestamp: dt.format("%Y-%m-%d %H:%M:%S %:z").to_string(),
+            stable: false,
         }
     }
 
@@ -265,6 +288,24 @@ mod tests {
         let result = manager.builder().with_session(&session).build();
 
         assert_eq!(result, "It is currently 1970-01-01 00:00:00 +00:00");
+    }
+
+    /// The test sets the field and leaves the environment alone, so no other
+    /// test can see it.
+    #[test]
+    fn a_stable_prompt_has_no_clock() {
+        let session = session_with_override("It is {{current_date_time}}.");
+        let prompt_at = |stable: bool, seconds: i64| {
+            let mut manager =
+                PromptManager::with_timestamp(DateTime::<Utc>::from_timestamp(seconds, 0).unwrap());
+            manager.stable = stable;
+            manager.builder().with_session(&session).build()
+        };
+
+        assert_eq!(prompt_at(false, 0), "It is 1970-01-01 00:00:00 +00:00.");
+        let first = prompt_at(true, 0);
+        assert_eq!(first, "It is .");
+        assert_eq!(first, prompt_at(true, 365 * 24 * 60 * 60), "a year later");
     }
 
     #[test]
